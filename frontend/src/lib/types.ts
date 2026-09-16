@@ -1,7 +1,7 @@
 export type Provider =
   | 'openai' | 'anthropic' | 'gemini' | 'xai' | 'groq' | 'mistral'
   | 'openrouter' | 'together' | 'deepseek' | 'ollama' | 'custom' | 'mock'
-  | 'azure';
+  | 'azure' | 'llmaas';
 
 export interface AIConfig {
   provider: Provider;

@@ -1,0 +1,70 @@
+# =====================================================
+# Python / Backend
+# =====================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing caches
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite database (recreated empty on first run via db.init_db())
+*.db
+*.db-shm
+*.db-wal
+bpmn_copilot.db
+
+# =====================================================
+# Secrets — NEVER commit
+# =====================================================
+.env
+.env.local
+.env.*.local
+
+# =====================================================
+# Node / Frontend
+# =====================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Vite
+.vite/
+
+# =====================================================
+# IDE / Editor / OS
+# =====================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# =====================================================
+# Logs
+# =====================================================
+*.log
+logs/

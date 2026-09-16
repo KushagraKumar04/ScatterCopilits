@@ -10,7 +10,24 @@ CORS_ORIGINS = os.environ.get(
     "http://localhost:5173,http://127.0.0.1:5173",
 ).split(",")
 
+# ---------------------------------------------------------------------------
+# VW LLMaaS (internal OpenAI-compatible gateway)
+# The gateway expects an OAuth bearer token in Authorization AND a virtual
+# key (sk-no...) in the X-LLM-API-CLIENT-ID header on every request.
+# ---------------------------------------------------------------------------
+LLMAAS_API_KEY = os.environ.get("LLMAAS_API_KEY", "")
+LLMAAS_CLIENT_ID = os.environ.get("LLMAAS_CLIENT_ID", "")
+LLMAAS_CLIENT_SECRET = os.environ.get("LLMAAS_CLIENT_SECRET", "")
+LLMAAS_IDP_URL = os.environ.get(
+    "LLMAAS_IDP_URL",
+    "https://idp.cloud.vwgroup.com/auth/realms/kums-mfa/protocol/openid-connect/token",
+)
+LLMAAS_BASE_URL = os.environ.get(
+    "LLMAAS_BASE_URL", "https://llmapi.ai.vwgroup.com"
+)
+
 MAX_SELF_CORRECT_LOOPS = int(os.environ.get("MAX_SELF_CORRECT_LOOPS", "3"))
+
 
 GEN_MAX_TOKENS = int(os.environ.get("GEN_MAX_TOKENS", "16000"))
 ENHANCE_MAX_TOKENS = int(os.environ.get("ENHANCE_MAX_TOKENS", "800"))

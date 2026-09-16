@@ -42,6 +42,22 @@ STRICT OUTPUT RULES:
 - Do NOT include a <bpmndi:BPMNDiagram> section at all. The visual layout is generated
   automatically and deterministically after you respond, so coordinates are unnecessary.
   Output ONLY the semantic process (events, tasks, gateways, sequenceFlows).
+
+LAYOUT & STRUCTURE RULES (apply to EVERY process, regardless of domain):
+- Tasks that belong to the SAME lane must sit on the SAME horizontal (or vertical)
+  baseline. Do not stagger task boxes within a lane - sequence flows must be
+  straight, never diagonal or crossing.
+- When two or more branches converge on a single end event, insert a joining
+  <bpmn:exclusiveGateway> immediately before that end event. NEVER let two
+  sequence flows point directly at the same end event without a merger.
+- If the branches end with genuinely different outcomes, use SEPARATE end events
+  (one per branch), each with its own distinct name. Do NOT merge them.
+- End events must belong to the lane of the actor who COMPLETES the workflow.
+  Never leave an end event in a lane that has no tasks.
+- No lane may contain ONLY an end event.
+- No lane may be empty (a lane with zero tasks, gateways, or activities is invalid).
+- Every lane must own at least one meaningful task (or a gateway that routes work).
+
 - Keep it compact: short IDs, minimal whitespace, no comments. Do not invent extra steps.
 """.strip()
 
@@ -179,6 +195,10 @@ def generate_bpmn_events(description: str, settings: AISettings):
         yield _ev("agent", agent="validator", status="done")
         if crit == 0:
             yield _ev("log", line="[Validator] Model passed deterministic checks. Loop complete.", level="success")
+            # Mark the Explainer step as complete so the stepper shows the pipeline finished.
+            # Emit 'active' first so the UI transitions correctly rather than jumping to 'done'.
+            yield _ev("agent", agent="explainer", status="active")
+            yield _ev("log", line="[Explainer] Model ready - click 'Explain for' to generate a narrative.")
             yield _ev("agent", agent="explainer", status="done")
             yield _ev("result", data={"xml": last_xml, "lint": _public_lint(result), "loops": loop})
             return
@@ -338,6 +358,28 @@ Follow this exact structure or the lanes will not render:
    drop the <bpmndi:BPMNDiagram>; extend it with the pool + lane shapes.
 """.strip()
 
+    structural_rules = """
+STRUCTURAL FIX RULES (apply when the linter flags these titles):
+- "End event merges multiple flows without a joining gateway":
+  Insert an <bpmn:exclusiveGateway> immediately before the end event. Rewire every
+  incoming branch to target the gateway, then add ONE outgoing sequenceFlow from
+  the gateway to the end event. Keep existing element IDs where possible.
+- "Swimlane contains only an end event":
+  Move the end event into the lane of the task immediately preceding it
+  (the lane of the actor who finishes the work). Update both the laneSet
+  flowNodeRef lists and the BPMNShape bounds so the event visibly sits inside
+  the correct lane.
+- "Swimlane has no tasks":
+  Prefer merging the lane's events into an adjacent lane and deleting the empty
+  lane. Only keep the lane if it represents a genuine system actor, and if so
+  add an explicit "Verb + Noun" task describing what that actor does.
+- "Empty swimlane":
+  Delete the lane, or assign it at least one meaningful task.
+- "Unreachable node" / "Dead-end node":
+  Rewire the surrounding sequenceFlows so every non-start node has both incoming
+  and outgoing flows, and every non-end node has both as well.
+""".strip()
+
     return f"""
 You are the Fixer agent inside BPMN Copilot. You receive an existing BPMN 2.0 XML
 document plus a list of issues found by the deterministic linter. Apply the MINIMAL
@@ -355,6 +397,8 @@ Rules:
 {reconnect_rules}
 
 {lane_rules}
+
+{structural_rules}
 
 Output ONLY the complete corrected BPMN 2.0 XML - no fences, no commentary - and it MUST
 end with </bpmn:definitions>.

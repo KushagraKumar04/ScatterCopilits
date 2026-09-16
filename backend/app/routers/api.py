@@ -1,5 +1,6 @@
-import json
 import io
+import json
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -32,6 +33,63 @@ def _fail(e: Exception) -> HTTPException:
 @router.get("/health")
 def health():
     return {"ok": True, "version": APP_VERSION}
+
+
+@router.get("/health/full")
+def health_full(settings: AISettings = Depends(get_ai_settings)):
+    """Diagnostic endpoint. Verifies DB, LLMaaS env, and OAuth token."""
+    result = {
+        "ok": True,
+        "version": APP_VERSION,
+        "provider": settings.norm_provider,
+        "model": settings.model,
+        "has_frontend_key": bool(settings.api_key),
+        "checks": {},
+    }
+
+    try:
+        db.list_history(limit=1)
+        result["checks"]["db"] = "ok"
+    except Exception as e:
+        result["checks"]["db"] = f"error: {e}"
+        result["ok"] = False
+
+    if settings.norm_provider == "llmaas":
+        for var in (
+            "LLMAAS_API_KEY",
+            "LLMAAS_CLIENT_ID",
+            "LLMAAS_CLIENT_SECRET",
+            "LLMAAS_IDP_URL",
+            "LLMAAS_BASE_URL",
+        ):
+            result["checks"][var] = "set" if os.environ.get(var) else "MISSING"
+        try:
+            from ..services.ai_client import _get_llmaas_token
+            _get_llmaas_token()
+            result["checks"]["llmaas_oauth"] = "ok"
+        except Exception as e:
+            result["checks"]["llmaas_oauth"] = f"error: {e}"
+            result["ok"] = False
+
+    return result
+
+
+@router.post("/health/llm")
+def health_llm(settings: AISettings = Depends(get_ai_settings)):
+    """Fire a 5-token call to the configured provider. Use this in Settings
+    to verify the key works before a demo."""
+    from ..services.ai_client import chat
+    try:
+        reply = chat(
+            "Reply with only the word OK.",
+            "ping",
+            settings,
+            temperature=0.0,
+            max_tokens=5,
+        )
+        return {"ok": True, "reply": (reply or "").strip()[:50]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
 
 
 @router.get("/presets")

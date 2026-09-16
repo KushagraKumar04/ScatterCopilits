@@ -6,6 +6,15 @@ from typing import Optional
 from ..config import MAX_XML_BYTES
 
 BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
+BPMNDI_NS = "http://www.omg.org/spec/BPMN/20100524/DI"
+DC_NS = "http://www.omg.org/spec/DD/20100524/DC"
+DI_NS = "http://www.omg.org/spec/DD/20100524/DI"
+
+# Required so ET.tostring keeps bpmn:/bpmndi: prefixes instead of ns0:, ns1:.
+ET.register_namespace("bpmn", BPMN_NS)
+ET.register_namespace("bpmndi", BPMNDI_NS)
+ET.register_namespace("dc", DC_NS)
+ET.register_namespace("di", DI_NS)
 
 WEIGHTS = {
     "connectivity": 30,
@@ -37,6 +46,74 @@ class BpmnParseError(Exception):
 
 def _local(tag: str) -> str:
     return tag.split("}", 1)[1] if "}" in tag else tag
+
+
+def _normalize_collaboration(root: ET.Element) -> bool:
+    """Ensure a process with lanes is wrapped in a collaboration AND that the
+    BPMNPlane points at that collaboration.
+
+    Two failure modes we fix here:
+      1. Lanes exist but no <bpmn:collaboration> -> add one.
+      2. Collaboration exists but BPMNPlane still points at the process ->
+         redirect it. Without this, bpmn-auto-layout flattens the process and
+         drops pool + lanes.
+
+    Returns True if the tree was modified.
+    """
+    process = None
+    for el in root.iter():
+        if _local(el.tag) == "process":
+            process = el
+            break
+    if process is None:
+        return False
+
+    has_lanes = any(_local(el.tag) == "laneSet" for el in process.iter())
+    if not has_lanes:
+        return False
+
+    # Locate any existing collaboration.
+    collab = None
+    for el in root.iter():
+        if _local(el.tag) == "collaboration":
+            collab = el
+            break
+
+    modified = False
+
+    if collab is None:
+        process_id = process.get("id", "Process_1")
+        collab_id = "Collaboration_1"
+        collab = ET.Element(f"{{{BPMN_NS}}}collaboration", {"id": collab_id})
+        ET.SubElement(
+            collab,
+            f"{{{BPMN_NS}}}participant",
+            {
+                "id": "Participant_1",
+                "name": "Process Pool",
+                "processRef": process_id,
+            },
+        )
+        children = list(root)
+        try:
+            idx = children.index(process)
+        except ValueError:
+            idx = 0
+        root.insert(idx, collab)
+        modified = True
+
+    collab_id = collab.get("id")
+    if not collab_id:
+        return modified
+
+    # Redirect every BPMNPlane that isn't already pointing at the collaboration.
+    for el in root.iter():
+        if _local(el.tag) == "BPMNPlane":
+            if el.get("bpmnElement") != collab_id:
+                el.set("bpmnElement", collab_id)
+                modified = True
+
+    return modified
 
 
 def _strip_code_fences(xml: str) -> str:
@@ -91,7 +168,7 @@ def _find_process(root: ET.Element) -> Optional[ET.Element]:
 def _collect(process: ET.Element) -> dict:
     nodes: dict[str, dict] = {}
     flows: list[dict] = []
-    lanes = 0
+    lanes: list[dict] = []
     for el in process.iter():
         name = _local(el.tag)
         if name == "sequenceFlow":
@@ -102,7 +179,15 @@ def _collect(process: ET.Element) -> dict:
                 "target": el.get("targetRef", ""),
             })
         elif name == "lane":
-            lanes += 1
+            lid = el.get("id", "") or ""
+            lname = (el.get("name") or "").strip() or lid or "Unnamed lane"
+            refs: list[str] = []
+            for child in el:
+                if _local(child.tag) == "flowNodeRef":
+                    ref = (child.text or "").strip()
+                    if ref:
+                        refs.append(ref)
+            lanes.append({"id": lid, "name": lname, "refs": refs})
         elif name in EVENT_TYPES or name in TASK_TYPES or name in GATEWAY_TYPES:
             nid = el.get("id", "")
             if nid:
@@ -121,7 +206,7 @@ def _collect(process: ET.Element) -> dict:
     return {"nodes": nodes, "flows": flows, "lanes": lanes}
 
 
-def _category(nodes: dict, flows: list, lanes: int) -> tuple[dict, list]:
+def _category(nodes: dict, flows: list, lanes: list) -> tuple[dict, list]:
     issues: list[dict] = []
     node_ids = set(nodes.keys())
 
@@ -190,6 +275,31 @@ def _category(nodes: dict, flows: list, lanes: int) -> tuple[dict, list]:
                 if unlabeled:
                     gateway -= per * 0.25
                     issues.append(_issue("warning", "Unlabeled gateway branches", f"Gateway '{_disp(g)}' has {len(unlabeled)} outgoing path(s) without a label (e.g. 'Yes'/'No').", node=g["id"], fix="label_branches"))
+
+    # NEW RULE: end events must not receive multiple direct incoming flows
+    # without a joining gateway upstream.
+    for end in ends:
+        incoming = end["incoming"]
+        if len(incoming) < 2:
+            continue
+        has_joiner = False
+        for f in incoming:
+            src = nodes.get(f["source"])
+            if src and src["type"] in GATEWAY_TYPES and len(src["incoming"]) >= 2:
+                has_joiner = True
+                break
+        if not has_joiner:
+            gateway -= 2
+            issues.append(_issue(
+                "warning",
+                "End event merges multiple flows without a joining gateway",
+                f"End event '{_disp(end)}' has {len(incoming)} direct incoming flows "
+                f"and no joining gateway. Insert an exclusive gateway before the end event, "
+                f"or give each branch its own named end event.",
+                node=end["id"],
+                fix="add_join_gateway",
+            ))
+
     gateway = max(0, gateway)
 
     naming = WEIGHTS["naming"]
@@ -205,9 +315,52 @@ def _category(nodes: dict, flows: list, lanes: int) -> tuple[dict, list]:
                 issues.append(_issue("warning", "Vague task name", f"'{t['name']}' is unclear. Use a specific 'Verb + Noun' name like 'Validate Request'.", node=t["id"], fix="rename_task"))
     naming = max(0, naming)
 
-    ownership = WEIGHTS["ownership"] if lanes > 0 else 0
-    if lanes == 0 and tasks:
-        issues.append(_issue("warning", "No swimlanes defined", "The process has no lanes/pools, so task ownership is not explicit. Consider adding roles.", fix="add_lanes"))
+    if lanes:
+        ownership = WEIGHTS["ownership"]
+        per_lane = WEIGHTS["ownership"] / max(len(lanes), 1)
+        for lane in lanes:
+            refs = [r for r in lane["refs"] if r in nodes]
+            lane_nodes = [nodes[r] for r in refs]
+            tasks_in = [n for n in lane_nodes if n["type"] in TASK_TYPES]
+            gateways_in = [n for n in lane_nodes if n["type"] in GATEWAY_TYPES]
+
+            if not lane_nodes:
+                ownership -= per_lane * 0.6
+                issues.append(_issue(
+                    "warning",
+                    "Empty swimlane",
+                    f"Lane '{lane['name']}' has no flow nodes assigned to it.",
+                    node=lane["id"] or None,
+                    fix="add_lanes",
+                ))
+                continue
+
+            if not tasks_in and not gateways_in:
+                if len(lane_nodes) == 1 and lane_nodes[0]["type"] == "endEvent":
+                    ownership -= per_lane * 0.8
+                    issues.append(_issue(
+                        "warning",
+                        "Swimlane contains only an end event",
+                        f"Lane '{lane['name']}' contains only an end event. "
+                        f"End events should sit in the lane of the actor that completes the workflow.",
+                        node=lane_nodes[0]["id"],
+                        fix="move_end_event_lane",
+                    ))
+                else:
+                    ownership -= per_lane * 0.5
+                    issues.append(_issue(
+                        "warning",
+                        "Swimlane has no tasks",
+                        f"Lane '{lane['name']}' contains no tasks or gateways - only events. "
+                        f"Merge it into a meaningful lane, or add the work this actor performs.",
+                        node=lane["id"] or None,
+                        fix="add_lanes",
+                    ))
+        ownership = max(0, ownership)
+    else:
+        ownership = 0
+        if tasks:
+            issues.append(_issue("warning", "No swimlanes defined", "The process has no lanes/pools, so task ownership is not explicit. Consider adding roles.", fix="add_lanes"))
 
     breakdown = {
         "connectivity": {"score": round(connectivity), "max": WEIGHTS["connectivity"]},
@@ -326,6 +479,19 @@ def _structural_di_issues(root: ET.Element) -> tuple[list, int]:
 def lint(xml: str) -> dict:
     _issue.counter = 0
     root = _parse(xml)
+    modified = _normalize_collaboration(root)
+
+    # bpmn-auto-layout@1.3.0 does not support collaborations. For any model
+    # with a laneSet, we generate the DI server-side so pool + lanes render.
+    try:
+        from . import bpmn_layout
+        if bpmn_layout.apply_layout(root):
+            modified = True
+    except Exception:
+        # Layout failure should never break linting. Fall through with
+        # whatever DI (or none) the model already had.
+        pass
+
     process = _find_process(root)
     if process is None:
         raise BpmnParseError("No <bpmn:process> element found in the document.")
@@ -349,8 +515,16 @@ def lint(xml: str) -> dict:
         "gateways": sum(1 for n in nodes.values() if n["type"] in GATEWAY_TYPES),
         "flows": len(flows),
     }
+    if modified:
+        cleaned = ET.tostring(root, encoding="unicode")
+        if not cleaned.lstrip().startswith("<?xml"):
+            cleaned = '<?xml version="1.0" encoding="UTF-8"?>\n' + cleaned
+        cleaned_xml = cleaned
+    else:
+        cleaned_xml = _strip_code_fences(xml)
+
     return {
-        "cleanedXml": _strip_code_fences(xml),
+        "cleanedXml": cleaned_xml,
         "totalScore": total,
         "band": _band(total),
         "breakdown": breakdown,
@@ -374,4 +548,4 @@ def summarize_for_llm(xml: str) -> dict:
         {"id": f["id"], "name": f["name"], "source": f["source"], "target": f["target"]}
         for f in collected["flows"]
     ]
-    return {"nodes": nodes, "flows": flows, "lanes": collected["lanes"]}
+    return {"nodes": nodes, "flows": flows, "lanes": len(collected["lanes"])}

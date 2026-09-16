@@ -159,3 +159,80 @@ def test_unintended_change_flagged():
         after,
         allowed_ids=["T1"],
     ) == []
+
+from . import bpmn_linter as L
+
+_NS = 'xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"'
+
+def _wrap_lanes(inner: str, lanes_xml: str) -> str:
+    return (
+        f'<?xml version="1.0"?>'
+        f'<bpmn:definitions {_NS}>'
+        f'<bpmn:process id="P">'
+        f'<bpmn:laneSet id="LS">{lanes_xml}</bpmn:laneSet>'
+        f'{inner}'
+        f'</bpmn:process></bpmn:definitions>'
+    )
+
+
+def test_linter_flags_end_event_with_multiple_incoming():
+    xml = _wrap_lanes(
+        '<bpmn:startEvent id="S"><bpmn:outgoing>F1</bpmn:outgoing><bpmn:outgoing>F3</bpmn:outgoing></bpmn:startEvent>'
+        '<bpmn:task id="A" name="Do A"><bpmn:incoming>F1</bpmn:incoming><bpmn:outgoing>F2</bpmn:outgoing></bpmn:task>'
+        '<bpmn:task id="B" name="Do B"><bpmn:incoming>F3</bpmn:incoming><bpmn:outgoing>F4</bpmn:outgoing></bpmn:task>'
+        '<bpmn:endEvent id="E" name="Done">'
+        '<bpmn:incoming>F2</bpmn:incoming>'
+        '<bpmn:incoming>F4</bpmn:incoming>'
+        '</bpmn:endEvent>'
+        '<bpmn:sequenceFlow id="F1" sourceRef="S" targetRef="A"/>'
+        '<bpmn:sequenceFlow id="F3" sourceRef="S" targetRef="B"/>'
+        '<bpmn:sequenceFlow id="F2" sourceRef="A" targetRef="E"/>'
+        '<bpmn:sequenceFlow id="F4" sourceRef="B" targetRef="E"/>',
+        '<bpmn:lane id="L1" name="Actor">'
+        '<bpmn:flowNodeRef>A</bpmn:flowNodeRef>'
+        '<bpmn:flowNodeRef>B</bpmn:flowNodeRef>'
+        '</bpmn:lane>',
+    )
+    result = L.lint(xml)
+    titles = [i["title"] for i in result["issues"]]
+    assert "End event merges multiple flows without a joining gateway" in titles
+
+
+def test_linter_flags_lane_with_only_end_event():
+    xml = _wrap_lanes(
+        '<bpmn:startEvent id="S" name="Start"><bpmn:outgoing>F1</bpmn:outgoing></bpmn:startEvent>'
+        '<bpmn:task id="T1" name="Work"><bpmn:incoming>F1</bpmn:incoming><bpmn:outgoing>F2</bpmn:outgoing></bpmn:task>'
+        '<bpmn:endEvent id="E1" name="Done"><bpmn:incoming>F2</bpmn:incoming></bpmn:endEvent>'
+        '<bpmn:sequenceFlow id="F1" sourceRef="S" targetRef="T1"/>'
+        '<bpmn:sequenceFlow id="F2" sourceRef="T1" targetRef="E1"/>',
+        '<bpmn:lane id="L1" name="Worker">'
+        '<bpmn:flowNodeRef>T1</bpmn:flowNodeRef>'
+        '</bpmn:lane>'
+        '<bpmn:lane id="L2" name="Done-only">'
+        '<bpmn:flowNodeRef>E1</bpmn:flowNodeRef>'
+        '</bpmn:lane>',
+    )
+    result = L.lint(xml)
+    titles = [i["title"] for i in result["issues"]]
+    assert "Swimlane contains only an end event" in titles
+
+
+def test_linter_flags_lane_with_no_tasks():
+    xml = _wrap_lanes(
+        '<bpmn:startEvent id="S" name="Start"><bpmn:outgoing>F1</bpmn:outgoing></bpmn:startEvent>'
+        '<bpmn:exclusiveGateway id="G" name="Ok?">'
+        '<bpmn:incoming>F1</bpmn:incoming>'
+        '<bpmn:outgoing>F2</bpmn:outgoing>'
+        '</bpmn:exclusiveGateway>'
+        '<bpmn:endEvent id="E1" name="Done"><bpmn:incoming>F2</bpmn:incoming></bpmn:endEvent>'
+        '<bpmn:sequenceFlow id="F1" sourceRef="S" targetRef="G"/>'
+        '<bpmn:sequenceFlow id="F2" name="Yes" sourceRef="G" targetRef="E1"/>',
+        '<bpmn:lane id="L1" name="Events-only">'
+        '<bpmn:flowNodeRef>S</bpmn:flowNodeRef>'
+        '<bpmn:flowNodeRef>G</bpmn:flowNodeRef>'
+        '<bpmn:flowNodeRef>E1</bpmn:flowNodeRef>'
+        '</bpmn:lane>',
+    )
+    result = L.lint(xml)
+    titles = [i["title"] for i in result["issues"]]
+    assert "Swimlane has no tasks" in titles
