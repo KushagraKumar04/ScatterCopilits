@@ -1,0 +1,9 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.11
+requests>=2.32
+python-dotenv>=1.0
+azure-identity>=1.17
+pytest>=8
+python-docx>=1.1.0
+fpdf2>=2.7.9
