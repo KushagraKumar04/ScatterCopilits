@@ -41,22 +41,100 @@ function triggerDownload(href: string, filename: string) {
   a.click();
 }
 
-// async function ensureLayout(xml: string): Promise<string> {
-//   if (/<bpmndi:BPMNShape|<BPMNShape/.test(xml)) return xml;
-//   try {
-//     const laid = await layoutProcess(xml);
-//     return laid || xml;
-//   } catch {
-//     return xml;
-//   }
-// }
+const BPMN_NS = 'http://www.omg.org/spec/BPMN/20100524/MODEL';
+const BPMNDI_NS = 'http://www.omg.org/spec/BPMN/20100524/DI';
+
+function ensureCollaboration(xml: string): string {
+  // Two failure modes we fix here:
+  //   1. Lanes exist but no collaboration -> add one.
+  //   2. Collaboration exists but BPMNPlane points at the process -> redirect.
+  // Without the redirect, bpmn-auto-layout flattens the process and drops
+  // pool + lanes. Backend already does this for generated models; this is a
+  // safety net for uploaded .bpmn files.
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, 'application/xml');
+
+    const process = doc.getElementsByTagNameNS(BPMN_NS, 'process')[0];
+    if (!process) return xml;
+
+    const hasLanes = process.getElementsByTagNameNS(BPMN_NS, 'laneSet').length > 0;
+    if (!hasLanes) return xml;
+
+    let collab = doc.getElementsByTagNameNS(BPMN_NS, 'collaboration')[0] || null;
+
+    if (!collab) {
+      const processId = process.getAttribute('id') || 'Process_1';
+
+      collab = doc.createElementNS(BPMN_NS, 'bpmn:collaboration');
+      collab.setAttribute('id', 'Collaboration_1');
+
+      const participant = doc.createElementNS(BPMN_NS, 'bpmn:participant');
+      participant.setAttribute('id', 'Participant_1');
+      participant.setAttribute('name', 'Process Pool');
+      participant.setAttribute('processRef', processId);
+      collab.appendChild(participant);
+
+      process.parentNode?.insertBefore(collab, process);
+    }
+
+    const collabId = collab.getAttribute('id');
+    if (!collabId) return xml;
+
+    const planes = doc.getElementsByTagNameNS(BPMNDI_NS, 'BPMNPlane');
+    for (const plane of Array.from(planes)) {
+      if (plane.getAttribute('bpmnElement') !== collabId) {
+        plane.setAttribute('bpmnElement', collabId);
+      }
+    }
+
+    return new XMLSerializer().serializeToString(doc);
+  } catch {
+    return xml;
+  }
+}
+
+function stripDiagram(xml: string): string {
+  // bpmn-auto-layout expects semantic XML with NO DI section. If DI is present,
+  // it can silently drop pool / lane shapes. Strip the entire <bpmndi:BPMNDiagram>
+  // before handing off, and let the library regenerate everything from scratch.
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, 'application/xml');
+    const diagrams = doc.getElementsByTagNameNS(BPMNDI_NS, 'BPMNDiagram');
+    for (const d of Array.from(diagrams)) {
+      d.parentNode?.removeChild(d);
+    }
+    return new XMLSerializer().serializeToString(doc);
+  } catch {
+    return xml;
+  }
+}
 
 async function ensureLayout(xml: string): Promise<string> {
-  if (/<bpmn:laneSet|<bpmn:collaboration/.test(xml)) return xml; // preserve lane layout
+  // The backend now runs a deterministic layout pass for any model with lanes,
+  // so if we already have a pool BPMNShape, we trust the DI as-is.
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xml, 'application/xml');
+    const hasPoolShape = Array.from(
+      doc.getElementsByTagNameNS(BPMNDI_NS, 'BPMNShape'),
+    ).some((s) => {
+      const ref = s.getAttribute('bpmnElement') || '';
+      return ref.startsWith('Participant_') || ref.startsWith('Pool_');
+    });
+    if (hasPoolShape) return xml;
+  } catch {
+    // fall through
+  }
+
+  // No pool DI means this is a plain process (no lanes). bpmn-auto-layout
+  // handles that case correctly.
   try {
     const laid = await layoutProcess(xml);
     return laid || xml;
-  } catch {
+  } catch (err) {
+    console.warn('[BpmnCanvas] Auto-layout failed, using raw XML:', err);
     return xml;
   }
 }
@@ -213,6 +291,31 @@ export const BpmnCanvas = forwardRef<CanvasHandle, Props>(function BpmnCanvas(
       const modeler = modelerRef.current!;
       const laidOut = await ensureLayout(xml);
       await modeler.importXML(laidOut);
+
+      // Render guard: if the XML declares lanes + collaboration but bpmn-js
+      // rendered zero lanes, the DI is wrong. Log loudly so we catch it
+      // immediately instead of shipping a lane-less diagram to the judges.
+      const declaresLanes = /<[^>]*laneSet/.test(laidOut);
+      const declaresCollab = /<[^>]*collaboration/.test(laidOut);
+      if (declaresLanes && declaresCollab) {
+        try {
+          const registry = modeler.get("elementRegistry") as any;
+          const laneCount = registry
+            .filter((el: any) => el.businessObject?.$type === "bpmn:Lane")
+            .length;
+          if (laneCount === 0) {
+            console.error(
+              "[BpmnCanvas] RENDER GUARD FAILED: XML declares lanes but 0 " +
+              "lanes rendered. DI is missing pool/lane shapes. Check bpmn_layout.py.",
+            );
+          } else {
+            console.info(`[BpmnCanvas] Render guard OK: ${laneCount} lanes rendered.`);
+          }
+        } catch {
+          void 0;
+        }
+      }
+
       try {
         (modeler.get("canvas") as any).zoom("fit-viewport", "auto");
       } catch {

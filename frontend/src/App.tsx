@@ -441,10 +441,15 @@ export default function App() {
   const explain = async () => {
     if (!xml || !ensureConfigured()) return;
     setBusy((b) => ({ ...b, explain: true }));
+    setAgents((a) => ({ ...a, explainer: "active" }));
+    pushLog("info", `[Explainer] Generating narrative for ${persona}...`);
     try {
-      setExplanation(await api.explain(xml, persona, cfg));
-      pushLog("info", `[Explainer] Generated narrative for ${persona}.`);
+      const result = await api.explain(xml, persona, cfg);
+      setExplanation(result);
+      setAgents((a) => ({ ...a, explainer: "done" }));
+      pushLog("success", `[Explainer] Generated narrative for ${persona}.`);
     } catch (e) {
+      setAgents((a) => ({ ...a, explainer: "idle" }));
       push("error", errMsg(e));
     } finally {
       setBusy((b) => ({ ...b, explain: false }));

@@ -23,6 +23,7 @@ const LABELS: Record<string, string> = {
   ollama: "Ollama",
   custom: "Custom",
   azure: "Azure (MI)",
+  llmaas: "LLMaaS",
   mock: "Demo mode",
 };
 

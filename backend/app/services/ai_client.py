@@ -26,6 +26,7 @@ _OPENAI_COMPATIBLE_BASE = {
     "together": "https://api.together.xyz/v1",
     "deepseek": "https://api.deepseek.com/v1",
     "ollama": "http://localhost:11434/v1",
+    "llmaas": "https://llmapi.ai.vwgroup.com/v1",   
 }
 _ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -43,6 +44,154 @@ def _get_azure_token() -> str:
         _AZURE_TOKEN_PROVIDER = get_bearer_token_provider(DefaultAzureCredential(), scope)
     return _AZURE_TOKEN_PROVIDER()
 
+
+# ---------------------------------------------------------------------------
+# VW LLMaaS — OAuth token cache + fetcher + chat function
+# ---------------------------------------------------------------------------
+_LLMAAS_TOKEN_CACHE: dict = {"token": None, "expires_at": 0.0}
+
+
+def _get_llmaas_token() -> str:
+    """Fetch (and cache) an OAuth access token from the VW Cloud IDP.
+
+    The LLMaaS gateway expects BOTH:
+      Authorization: Bearer <oauth_access_token>   (short-lived)
+      X-LLM-API-CLIENT-ID: Bearer <virtual_key>    (the sk-no... key)
+    The virtual key alone is NOT sufficient.
+    """
+    now = time.time()
+    cached = _LLMAAS_TOKEN_CACHE.get("token")
+    expires_at = _LLMAAS_TOKEN_CACHE.get("expires_at", 0.0)
+    if cached and now < expires_at - 30:
+        return cached
+
+    client_id = os.environ.get("LLMAAS_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("LLMAAS_CLIENT_SECRET", "").strip()
+    idp_url = (
+        os.environ.get("LLMAAS_IDP_URL", "").strip()
+        or "https://idp.cloud.vwgroup.com/auth/realms/kums-mfa/protocol/openid-connect/token"
+    )
+    if not client_id or not client_secret:
+        raise AIConfigError(
+            "LLMaaS OAuth credentials missing. Set LLMAAS_CLIENT_ID and "
+            "LLMAAS_CLIENT_SECRET in the server .env file."
+        )
+
+    try:
+        resp = requests.post(
+            idp_url,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "client_credentials",
+            },
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as e:
+        raise AIAPIError(f"Could not reach the LLMaaS IDP at {idp_url}: {e}")
+
+    if resp.status_code != 200:
+        raise AIAPIError(
+            f"LLMaaS IDP rejected the token request ({resp.status_code}): "
+            f"{resp.text[:200]}"
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        raise AIAPIError(f"LLMaaS IDP returned non-JSON: {resp.text[:200]}")
+
+    token = data.get("access_token")
+    if not token:
+        raise AIAPIError(
+            f"LLMaaS IDP response had no access_token: {str(data)[:200]}"
+        )
+
+    expires_in = int(data.get("expires_in") or 300)
+    _LLMAAS_TOKEN_CACHE["token"] = token
+    _LLMAAS_TOKEN_CACHE["expires_at"] = now + expires_in
+    return token
+
+
+def _chat_llmaas(system_prompt, user_prompt, s, json_mode, temperature, max_tokens) -> str:
+    """Chat via the VW LLMaaS gateway.
+
+    - Adds X-LLM-API-CLIENT-ID (virtual key) + Authorization (OAuth token)
+    - Routes gpt-5* through the Responses API (/v1/responses)
+    - Routes everything else through Chat Completions (/v1/chat/completions)
+    - Refreshes the OAuth token once on a 401/403
+    """
+    virtual_key = (s.api_key or os.environ.get("LLMAAS_API_KEY", "")).strip()
+    if not virtual_key:
+        raise AIConfigError(
+            "No LLMaaS virtual key provided. Paste the sk-no… key in Settings, "
+            "or set LLMAAS_API_KEY in the server .env."
+        )
+
+    base = s.resolved_base().rstrip("/")
+    model = s.model or "gpt-4o"
+    is_gpt5 = model.lower().startswith("gpt-5")
+
+    def _do_call() -> dict:
+        token = _get_llmaas_token()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "X-LLM-API-CLIENT-ID": f"Bearer {virtual_key}",
+        }
+        if is_gpt5:
+            url = f"{base}/responses"
+            payload = {
+                "model": model,
+                "instructions": system_prompt,
+                "input": user_prompt,
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+        else:
+            url = f"{base}/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if json_mode:
+                payload["response_format"] = {"type": "json_object"}
+        return _post_with_retries(url, headers, payload)
+
+    try:
+        data = _do_call()
+    except AIAPIError as e:
+        if e.status_code in (401, 403):
+            _LLMAAS_TOKEN_CACHE["token"] = None
+            _LLMAAS_TOKEN_CACHE["expires_at"] = 0.0
+            data = _do_call()
+        else:
+            raise
+
+    if is_gpt5:
+        try:
+            for item in data.get("output", []):
+                if item.get("type") == "message":
+                    for part in item.get("content", []):
+                        if part.get("type") == "output_text":
+                            text = part.get("text", "")
+                            if text:
+                                return text
+            raise AIAPIError(f"Empty LLMaaS Responses output: {str(data)[:300]}")
+        except AIAPIError:
+            raise
+        except (KeyError, IndexError, TypeError):
+            raise AIAPIError(f"Unexpected LLMaaS Responses shape: {str(data)[:300]}")
+
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise AIAPIError(f"Unexpected LLMaaS response shape: {str(data)[:300]}")
 
 
 class AIConfigError(Exception):
@@ -102,6 +251,8 @@ def chat(system_prompt, user_prompt, settings, *, json_mode=False, temperature=0
         return _chat_gemini(system_prompt, user_prompt, settings, json_mode, temperature, max_tokens)
     if p in ("azure", "azure-mi", "azure_openai"):
         return _chat_azure(system_prompt, user_prompt, settings, json_mode, temperature, max_tokens)
+    if p == "llmaas":
+        return _chat_llmaas(system_prompt, user_prompt, settings, json_mode, temperature, max_tokens)
 
     return _chat_openai(system_prompt, user_prompt, settings, json_mode, temperature, max_tokens)
 

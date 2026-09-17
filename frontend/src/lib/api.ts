@@ -87,6 +87,13 @@ async function streamSSE(url: string, headers: Record<string, string>, bodyObj: 
 
 export const api = {
   health: () => req<{ ok: boolean; version: string }>('/api/health'),
+  healthFull: () => req<{ ok: boolean; version: string; checks: Record<string, string> }>('/api/health/full'),
+  testLLM: (cfg: AIConfig) =>
+    req<{ ok: boolean; reply?: string; error?: string }>('/api/health/llm', {
+      method: 'POST',
+      headers: aiHeaders(cfg),
+      body: JSON.stringify({}),
+    }),
   presets: () => req<{ presets: Preset[] }>('/api/presets').then((d) => d.presets),
 
   lint: (xml: string) =>

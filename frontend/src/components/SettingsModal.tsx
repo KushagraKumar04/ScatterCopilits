@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AIConfig, Provider } from "../lib/types";
+import { api } from "../lib/api";
 import { useI18n } from "../lib/LanguageContext";
 import { Check, Close, Robot } from "./icons";
 
@@ -85,6 +86,13 @@ const PROVIDERS: ProviderMeta[] = [
     keyHint: "not required",
   },
   {
+    id: "llmaas",
+    label: "VW LLMaaS (internal)",
+    needsKey: true,
+    models: ["gpt-4o", "gpt-5-mini", "gpt-4.1-mini"],
+    keyHint: "sk-no…",
+  },
+  {
     id: "azure",
     label: "Azure OpenAI (Managed Identity)",
     needsKey: false,
@@ -120,6 +128,8 @@ export function SettingsModal({ open, value, onClose, onSave }: Props) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<AIConfig>(value);
   const [showKey, setShowKey] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   useEffect(() => {
     if (open) setDraft(value);
   }, [open, value]);
@@ -259,14 +269,44 @@ export function SettingsModal({ open, value, onClose, onSave }: Props) {
           )}
         </div>
 
-        <div className="mt-6 flex justify-end gap-2">
-          <button className="btn-ghost" onClick={onClose}>
-            {t("settings.cancel")}
+        <div className="mt-6 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            className="btn-subtle !min-h-[38px]"
+            disabled={testing}
+            onClick={async () => {
+              setTesting(true);
+              setTestResult(null);
+              try {
+                const r = await api.testLLM(draft);
+                setTestResult({
+                  ok: r.ok,
+                  msg: r.ok ? `Connected. Reply: ${r.reply || "(empty)"}` : (r.error || "Failed."),
+                });
+              } catch (e) {
+                setTestResult({ ok: false, msg: e instanceof Error ? e.message : "Failed." });
+              } finally {
+                setTesting(false);
+              }
+            }}
+          >
+            {testing ? "Testing…" : "Test connection"}
           </button>
-          <button className="btn-primary" onClick={() => onSave(draft)}>
-            <Check width={16} height={16} /> {t("settings.save")}
-          </button>
+          <div className="flex gap-2">
+            <button className="btn-ghost" onClick={onClose}>
+              {t("settings.cancel")}
+            </button>
+            <button className="btn-primary" onClick={() => onSave(draft)}>
+              <Check width={16} height={16} /> {t("settings.save")}
+            </button>
+          </div>
         </div>
+
+        {testResult && (
+          <p className={`mt-3 rounded-lg px-3 py-2 text-sm ${testResult.ok ? "bg-good/10 text-good" : "bg-bad/10 text-bad"}`}>
+            {testResult.ok ? "✓ " : "✗ "}{testResult.msg}
+          </p>
+        )}
       </div>
     </div>
   );
