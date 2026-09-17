@@ -43,3 +43,9 @@ class ReviewExportRequest(BaseModel):
     report: dict
     format: str = "md"         
     processName: str | None = None
+
+
+class AssistantChatRequest(BaseModel):
+    xml: str = ""
+    question: str = Field(..., min_length=1, max_length=MAX_QUERY_CHARS)
+    context: str = ""

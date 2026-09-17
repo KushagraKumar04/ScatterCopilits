@@ -108,6 +108,13 @@ export const api = {
   explain: (xml: string, persona: Persona, cfg: AIConfig) =>
     req<Explanation>('/api/explain', { method: 'POST', headers: aiHeaders(cfg), body: JSON.stringify({ xml, persona }) }),
 
+  assistantChat: (xml: string, question: string, context: string, cfg: AIConfig) =>
+    req<{ reply: string }>('/api/assistant/chat', {
+      method: 'POST',
+      headers: aiHeaders(cfg),
+      body: JSON.stringify({ xml: xml || '', question, context }),
+    }).then((d) => d.reply),
+
   automate: (xml: string, cfg: AIConfig) =>
     req<{ candidates: AutomationCandidate[] }>('/api/automate', { method: 'POST', headers: aiHeaders(cfg), body: JSON.stringify({ xml }) }).then((d) => d.candidates),
   

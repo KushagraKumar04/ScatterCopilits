@@ -10,6 +10,8 @@ import { layoutProcess } from "bpmn-auto-layout";
 import "bpmn-js/dist/assets/diagram-js.css";
 import "bpmn-js/dist/assets/bpmn-font/css/bpmn.css";
 import { useI18n } from "../lib/LanguageContext";
+import { SkeletonBpmn } from "./SkeletonBpmn";
+import { EmptyCanvas } from "./EmptyCanvas";
 import { Upload, Sparkles, Grid } from "./icons";
 
 export interface CanvasHandle {
@@ -255,6 +257,26 @@ export const BpmnCanvas = forwardRef<CanvasHandle, Props>(function BpmnCanvas(
     };
   }, []);
 
+  // ---- Model "birth" animation ----
+  // Whenever a real import happens, briefly add a class to the SVG that
+  // triggers a fade + scale-in on every shape and edge. Triggers on the
+  // empty → non-empty transition, so the skeleton → real model hand-off
+  // feels continuous.
+  const prevEmptyRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const wasEmpty = prevEmptyRef.current;
+    prevEmptyRef.current = empty;
+
+    // Trigger only on empty → non-empty transition.
+    if (wasEmpty === true && empty === false) {
+      host.classList.add("bpmn-birth");
+      const id = setTimeout(() => host.classList.remove("bpmn-birth"), 900);
+      return () => clearTimeout(id);
+    }
+  }, [empty]);
+
   const zoomBy = (factor: number) => {
     try {
       const canvas = modelerRef.current!.get<any>("canvas");
@@ -484,40 +506,9 @@ export const BpmnCanvas = forwardRef<CanvasHandle, Props>(function BpmnCanvas(
         </button>
       </div>
 
-      {empty && !loading && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center pl-40">
-          <div className="max-w-sm text-center animate-fade-up">
-            <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-brand/10 text-brand">
-              <Sparkles />
-            </div>
-            <h3 className="text-lg font-bold text-slate-800">
-              {t("canvas.emptyTitle")}
-            </h3>
-            <p className="mt-1.5 text-sm text-slate-500">
-              {t("canvas.emptyBody")}{" "}
-              <span className="font-semibold text-slate-800">
-                {t("canvas.emptyBodyGenerate")}
-              </span>
-              , {t("canvas.emptyBodyOr")}{" "}
-              <code className="rounded bg-slate-200 px-1 text-slate-700">
-                {t("canvas.emptyBodyFile")}
-              </code>{" "}
-              {t("canvas.emptyBodyEnd")}
-            </p>
-          </div>
-        </div>
-      )}
+      {empty && !loading && <EmptyCanvas />}
 
-      {loading && (
-        <div className="absolute inset-0 z-20 grid place-items-center bg-canvas/70 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-3 animate-fade-up">
-            <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-border border-t-brand" />
-            <p className="text-sm font-semibold text-muted">
-              {t("canvas.loading")}
-            </p>
-          </div>
-        </div>
-      )}
+      {loading && <SkeletonBpmn />}
 
       {dragOver && (
         <div className="absolute inset-3 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-brand bg-brand/5">

@@ -5,7 +5,7 @@ import { Check, Alert, Close } from './icons';
 export function Toasts({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
   const { t } = useI18n();
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-full max-w-sm flex-col gap-2">
+    <div className="pointer-events-none fixed top-16 left-1/2 z-[60] flex w-full max-w-md -translate-x-1/2 flex-col gap-2 px-4">
       {toasts.map((t2) => {
         const tone = t2.kind === 'success' ? 'good' : t2.kind === 'error' ? 'bad' : 'brand';
         return (
