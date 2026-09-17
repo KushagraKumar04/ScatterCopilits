@@ -10,6 +10,8 @@ import type {
   Persona,
 } from "../lib/types";
 import { useI18n } from "../lib/LanguageContext";
+import { useCountUp } from "../hooks/useCountUp";
+import { Confetti } from "./Confetti";
 import { OptimizePane } from "./OptimizePane";
 import {
   Alert,
@@ -205,6 +207,19 @@ function HealthPane({
 }) {
   const { t } = useI18n();
   const score = lint?.totalScore ?? 0;
+  const displayScore = useCountUp(lint ? score : 0, 950);
+
+  // Fire confetti when the score transitions INTO 100 from any other value.
+  const [confettiKey, setConfettiKey] = useState(0);
+  const prevScoreRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!lint) return;
+    if (score === 100 && prevScoreRef.current !== 100) {
+      setConfettiKey((k) => k + 1);
+    }
+    prevScoreRef.current = score;
+  }, [score, lint]);
+
   const tone = score >= 90 ? "good" : score >= 70 ? "warn" : "bad";
   const toneRGB = {
     good: "var(--good)",
@@ -213,10 +228,11 @@ function HealthPane({
   }[tone];
   const R = 52,
     C = 2 * Math.PI * R;
-  const dash = lint ? (score / 100) * C : 0;
+  const dash = lint ? (displayScore / 100) * C : 0;
 
   return (
-    <div>
+    <div className="relative">
+      <Confetti trigger={confettiKey} />
       <div className="flex flex-col items-center py-2">
         <div
           className="relative grid place-items-center"
@@ -252,7 +268,7 @@ function HealthPane({
           </svg>
           <div className="absolute text-center">
             <div className="text-4xl font-extrabold leading-none text-ink">
-              {lint ? score : "-"}
+              {lint ? displayScore : "-"}
             </div>
             <div className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted">
               {t("health.score")}

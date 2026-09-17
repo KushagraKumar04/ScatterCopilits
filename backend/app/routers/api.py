@@ -7,7 +7,11 @@ from fastapi.responses import StreamingResponse
 from .. import db
 from ..config import APP_VERSION, PRESETS
 from ..deps import get_ai_settings
-from ..schemas import EditRequest, EnhanceRequest, ExplainRequest, FixRequest, GenerateRequest, ReviewExportRequest, SuggestRequest, XmlRequest
+from ..schemas import (
+    AssistantChatRequest,
+    EditRequest, EnhanceRequest, ExplainRequest, FixRequest,
+    GenerateRequest, ReviewExportRequest, SuggestRequest, XmlRequest,
+)
 from ..services import agents
 from ..services import power_automate
 from ..services import bpmn_optimize
@@ -219,6 +223,16 @@ def api_explain(body: ExplainRequest, settings: AISettings = Depends(get_ai_sett
         raise HTTPException(400, detail={"error": "xml is required.", "code": "BAD_REQUEST"})
     try:
         return agents.explain_bpmn(body.xml, body.persona, settings)
+    except Exception as e:
+        raise _fail(e)
+
+
+@router.post("/assistant/chat")
+def api_assistant_chat(body: AssistantChatRequest, settings: AISettings = Depends(get_ai_settings)):
+    """Floating assistant — conversational replies grounded in the current model."""
+    try:
+        from ..services import assistant
+        return {"reply": assistant.reply(body.xml, body.question, body.context, settings)}
     except Exception as e:
         raise _fail(e)
 

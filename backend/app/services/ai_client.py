@@ -15,6 +15,13 @@ except Exception:
     DEFAULT_TIMEOUT = int(os.environ.get("AI_TIMEOUT_SECONDS", "120"))
     MAX_RETRIES = 2
 
+_AI_TLS_VERIFY = os.environ.get("AI_TLS_VERIFY", "true").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+if not _AI_TLS_VERIFY:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 _OPENAI_COMPATIBLE_BASE = {
     "openai": "https://api.openai.com/v1",
@@ -387,12 +394,19 @@ def _post_with_retries(url, headers, payload) -> dict:
     last_error: Optional[Exception] = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=DEFAULT_TIMEOUT)
+            resp = requests.post(
+                url,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=DEFAULT_TIMEOUT,
+                verify=_AI_TLS_VERIFY,
+            )
         except requests.exceptions.SSLError as e:
             raise AIAPIError(
                 f"TLS certificate verification failed contacting the AI provider ({e}). "
-                "On a corporate network run 'pip install pip-system-certs' in the venv, "
-                "or set REQUESTS_CA_BUNDLE to your root CA .pem before starting the app."
+                "Fix options: (1) set AI_TLS_VERIFY=false in the server .env for a quick "
+                "workaround, (2) run 'pip install pip-system-certs' in the venv, or "
+                "(3) set REQUESTS_CA_BUNDLE to your corporate root CA .pem."
             )
         except requests.exceptions.Timeout:
             last_error = AIAPIError("AI provider request timed out.")

@@ -27,6 +27,7 @@ import { InsightsPanel } from "./components/InsightsPanel";
 import { BpmnCanvas, type CanvasHandle } from "./components/BpmnCanvas";
 import { ChatPanel } from "./components/ChatPanel";
 import { Toasts } from "./components/Toasts";
+import { CopilotBot } from "./components/CopilotBot";
 
 
 const DEFAULT_CFG: AIConfig = { provider: "mock", apiKey: "", model: "mock" };
@@ -620,6 +621,21 @@ export default function App() {
           push("success", "AI settings saved.");
         }}
       />
+
+      <CopilotBot
+        xml={xml}
+        lint={lint}
+        cfg={cfg}
+        onFixAll={fixAll}
+        onExplain={explain}
+        onAutomate={automate}
+        onOptimize={() => {
+          setBusy((b) => ({ ...b, explain: true }));
+          sendEdit("optimize this process");
+        }}
+        ensureConfigured={ensureConfigured}
+      />
+
       <Toasts toasts={toasts} onDismiss={dismiss} />
     </div>
     </LanguageProvider>

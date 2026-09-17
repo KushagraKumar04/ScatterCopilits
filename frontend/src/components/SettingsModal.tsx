@@ -152,8 +152,13 @@ export function SettingsModal({ open, value, onClose, onSave }: Props) {
       <div className="card w-full max-w-lg animate-fade-up p-6 shadow-pop">
         <div className="mb-5 flex items-start justify-between">
           <div className="flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand/10 text-brand">
-              <Robot />
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white overflow-hidden">
+              <img
+                src="/brand/skoda_Auto3.png"
+                alt=""
+                className="h-full w-full object-contain p-1"
+                draggable={false}
+              />
             </span>
             <div>
               <h2 id="settings-title" className="text-lg font-bold">

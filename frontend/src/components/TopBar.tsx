@@ -59,8 +59,13 @@ export function TopBar({
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/80 px-4 py-2.5 backdrop-blur">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand text-brand-fg shadow-glow">
-            <Sparkles width={18} height={18} />
+          <span className="topbar-logo">
+            <img
+              src={dark ? "/brand/skoda_Auto7.jpeg" : "/brand/skoda_Auto2.png"}
+              alt=""
+              className="topbar-logo-img"
+              draggable={false}
+            />
           </span>
           <div>
             <h1 className="text-base font-extrabold leading-none">
