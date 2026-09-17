@@ -1,5 +1,15 @@
 import os
 
+# Load .env into os.environ before reading any variable.
+# This makes backend/.env the source of truth for LLMAAS_* etc.
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    load_dotenv(_env_path, override=False)
+except Exception:
+    # python-dotenv not installed yet — values will fall back to real env vars.
+    pass
+
 APP_NAME = "BPMN Copilot"
 APP_VERSION = "2.2.0"
 
